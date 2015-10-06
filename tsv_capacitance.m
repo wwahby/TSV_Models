@@ -3,9 +3,9 @@ clear all
 
 %% Inputs
 
-Rmet = 5e-6; % (m) Radius of TSV metal core
+tsv_diameter = 5e-6; % (m) Diameter of TSV metal core
 l_tsv = 20e-6; % (m) TSV length
-tox = 50e-9; % (m) Thickness of oxide liner
+tox = 120e-9; % (m) Thickness of oxide liner
 
 Na_cm = 2e15; % (cm^-3) Background substrate doping (p-type)
 ni_cm = 1e10; % (cm^-3) Intrinsic carrier concentration in substrate (1e10 for Si)
@@ -24,7 +24,7 @@ phi_cu = 4.7; % (eV) Work function of copper
 chi_si = 4.05; % (eV) Electron affinity of silicon
 
 Npts_v = 1e3;
-Vtsv = linspace(-10, 10, Npts_v);
+Vtsv = linspace(-5, 5, Npts_v);
 Ctsv = zeros(1, Npts_v);
 
 %% Constants
@@ -44,114 +44,122 @@ phi_si = chi_si + E_bb;
 phi_ms = phi_cu - phi_si; % Work function difference between copper and silicon
 Qot = Qot_cm2 * 100^2; % (C/m^2) Total oxide charge
 
+Rmet = tsv_diameter/2; % (m) Radius of TSV metal core
 Rox = Rmet + tox; % (m) Outer radius of TSV oxide liner
 
 
 %% Useful quantities
-alpha = q*Na/4/eps_si; % Prefactor in the Rmax calculation
-v_thermal = kb*T/q; % (V) Thermal voltage
-beta = 2*kb*T/q/alpha* log(Na/ni) - Rox^2;
+a = q*Na/4/eps_si;
+phi_f = kb*T/q*log(Na/ni);
+beta = 2*phi_f/a - Rox^2;
 
 %% Calculations
 
+% Oxide capacitance
 Cox = 2*pi*eps_ox*l_tsv/log(Rox/Rmet); % (F) oxide capacitance
 
-Rmax = sqrt(beta)/sqrt(lambertw(0.367879*beta/Rox^2));
+% Approximate value for maximum depletion width
+Rmax_guess = sqrt(beta)/sqrt(lambertw(0.367879*beta/Rox^2)); % guess from wolfram alpha solution of Rmax equation
 
-a = 2*kb*T/q/alpha * log(Na/ni);
-b = Rox;
-Rmax_alt = b*exp( 1/2*lambertw( (a-b^2)/exp(1)/b^2 ) + 1);
-%Rmax = Rmax_alt;
+% Function for finding more accurate Rmax
+rmax_func = @(Rmax) abs( a*Rox^2 - 2*a*Rmax.^2.*log(Rox) + a*Rmax.^2.*(2*log(Rmax) - 1) - 2*phi_f );
 
-Vfb = phi_ms - Rox*q*Qot_cm2*log(Rox/Rmet)/eps_ox;
-%Vth = phi_ms - Vfb + 2*v_thermal*log(Na/ni) + q*Na*(Rmax^2-Rox^2)/2/eps_ox*log(Rox/Rmet);
-Vth = phi_ms - Vfb + 2*v_thermal*log(Na/ni) + q*Na*(Rmax^2-Rox^2)/2/eps_si*log(Rmax/Rox);
+% Find Rmax using either fminbnd or fminsearch
+% Fminbnd may be faster, but fminsearch may avoid truncating search space
+opts = optimset('TolX', 1e-16);
+[Rmax, fval] = fminbnd( rmax_func, 0.1*Rmax_guess, 10*Rmax_guess, opts);
+%[Rmax, fval] = fminsearch( rmax_func, Rmax_guess, opts);
 
-% TSV voltage in depletion region (Vfb <= Vtsv <= Vth)
-gamma = q*Na/2/eps_ox*log(Rox/Rmet); % prefactor
-gamma_prime = q*Na/2/eps_si; % prefactor, corrected
 
-%Rdep = sqrt( Rmax^2  - (Vth-Vtsv)/gamma);
+Vfb = phi_ms - Rox*q*Qot*log(Rox/Rmet)/eps_ox;
+%Vth = Vfb + 2*v_thermal*log(Na/ni) + q*Na*(Rmax^2-Rox^2)/2/eps_ox*log(Rox/Rmet); % Formula from Katti, possibly incorrect or inapplicable(Vth = Vfb - Qd/Ci + 2*phi_f)
+Vth = Vfb + q*Na*(Rmax^2-Rox^2)/2/eps_si*log(Rmax/Rox); % Modified formula: Vth = Vfb - Qd/Cd
+
+% Alt formulation: Vt = phi_ms + Qi/Ci + Qd/Ci + 2*phi_f
+% Matches Above when Vtdep depends on Cdep_min
+Cdep_min = 2*pi*eps_si*l_tsv/log(Rmax/Rox);
+qdep_max = q*Na*pi*(Rmax^2-Rox^2)*l_tsv;
+Vtdep = qdep_max/Cdep_min;
+%Vtdep = qdep_max/Cox;
+Vth2 = Vfb + Vtdep;% + 2*phi_f;
+
 
 %% Find Rdep for appropriate voltages
-rr = linspace(Rox, Rmax, 1e2);
-f4 = figure(4);
-clf
-hold on
-f5 = figure(5);
-clf
-hold on
-
 Rdep = zeros(1, Npts_v );
-vind_dep_start = find( Vtsv >= Vfb, 1);
+vind_dep_start = find( Vtsv >= Vfb, 1, 'first');
 vind_dep_stop = find(Vtsv <= Vth, 1, 'last');
+
 for vind = vind_dep_start:vind_dep_stop
     vtsv = Vtsv(vind);
-    solve_func = @(Rdep) (Rdep.^2 - Rox^2).*log(Rdep/Rox) - 1/gamma_prime*(vtsv-Vfb);
-    solve_func_real = @(Rdep) real(solve_func(Rdep));
-    solve_func_imag = @(Rdep) imag(solve_func(Rdep));
-    roots_real = fzero(solve_func_real, Rmax);
-    roots_imag = fzero(solve_func_imag, Rmax);
-    Rdep(vind) = roots_real;
     
-    dd = solve_func(rr);
-    figure(4)
-    plot(rr, real(dd));
-    figure(5)
-    plot(rr, imag(dd));
+    rdep_func = @(Rdep) abs( 2*a*(Rdep.^2 - Rox^2).*log(Rdep/Rox) - (vtsv - Vfb) );
+%     rdep_func = @(Rdep) abs( 2*a*(Rdep.^2 - Rox^2).*log(Rdep/Rox) - (vtsv - Vfb - 2*phi_f) );
+%     rdep_func = @(Rdep) abs( q*Na/2/eps_ox*(Rdep.^2 - Rox^2).*log(Rox/Rmet) - (vtsv - Vfb - 2*phi_f) );
+    rdep = fminsearch( rdep_func, Rox, opts);
+    %[rdep, fval] = fminbnd( rdep_func, Rox, Rmax, opts);
+    
+    Rdep(vind) = rdep;
 end
-
-%Rdep(vind_stop+1:end) = Rmax;
-
-
 
 %% Capacitance
 % Accumulation region (Vtsv < Vfb)
-Ctsv(Vtsv < Vfb) = Cox;
+Ctsv(Vtsv <= Vfb) = Cox;
 
 % Depletion ( Vfb <= Vtsv <= Vth)
 Cdep = 2*pi*eps_si*l_tsv./log(Rdep/Rox);
-in_depletion = ((Vtsv >= Vfb) & (Vtsv <= Vth));
-Ctsv(in_depletion) = Cox*Cdep(in_depletion)./(Cox + Cdep(in_depletion));
+in_depletion = ((Vtsv >= Vfb) & (Vtsv < Vth));
+%Ctsv(in_depletion) = Cox*Cdep(in_depletion)./(Cox + Cdep(in_depletion));
+Ctsv(in_depletion) = (1/Cox + 1./Cdep(in_depletion) ).^-1;
 
 % Inversion (Vtsv >= Vth)
 Cdep_min = 2*pi*eps_si*l_tsv/log(Rmax/Rox);
 Ctsv_min = Cox*Cdep_min/(Cox+Cdep_min);
 Ctsv(Vtsv >= Vth) = Cox*Cdep_min/(Cox+Cdep_min);
 
-
-
 fprintf('Rmax: %.3g um\n', Rmax*1e6)
-fprintf('Rmax_alt: %.3g um\n', Rmax_alt*1e6)
 fprintf('Vth: %.3g V\n', Vth)
 fprintf('Vfb: %.3g V\n', Vfb)
 fprintf('Cox: %.3g fF\n', Cox*1e15)
 fprintf('Cdep_min: %.3g fF\n', Cdep_min*1e15)
 fprintf('Ctsv_min: %.3g fF\n', Ctsv_min*1e15)
+fprintf('\n')
 
 %% Plots
 
 figure(1)
 clf
+hold on
 plot(Vtsv, Ctsv*1e15)
+plot(Vtsv(vind_dep_start:vind_dep_start+1), [min(Ctsv) max(Ctsv)]*1e15,'k:')
+plot(Vtsv(vind_dep_stop-1:vind_dep_stop), [min(Ctsv) max(Ctsv)]*1e15,'k:')
 xlabel('DC Bias (V)')
 ylabel('TSV Capacitance (fF)')
 %set(gca,'yscale','log')
 fixfigs(1,3,14,12)
 
-figure(2)
+figure(4)
 clf
-plot(Vtsv, imag(Ctsv))
+hold on
+plot(Vtsv(in_depletion), Ctsv(in_depletion)*1e15,'k')
+plot(Vtsv(in_depletion), Cox*ones(1,length(Ctsv(in_depletion)))*1e15, 'b--')
+plot(Vtsv(in_depletion), Cdep(in_depletion)*1e15, 'r')
+plot(Vtsv(in_depletion), Cdep_min*ones(1,length(Ctsv(in_depletion)))*1e15, 'r--')
 xlabel('DC Bias (V)')
-ylabel('TSV Capacitance')
-fixfigs(1,3,14,12)
+ylabel('TSV Capacitance (fF)')
+%set(gca,'yscale','log')
+xlim( [min(Vtsv(in_depletion)) max(Vtsv(in_depletion)) ])
+fixfigs(4,3,14,12)
 
-figure(3)
+figure(5)
 clf
-plot(Vtsv(in_depletion), imag(Rdep(in_depletion)))
+hold on
+plot(Vtsv(in_depletion), Rox*ones(1,length(Ctsv(in_depletion)))*1e6, 'k')
+plot(Vtsv(in_depletion), Rdep(in_depletion)*1e6,'b')
+plot(Vtsv(in_depletion), Rmax*ones(1,length(Ctsv(in_depletion)))*1e6, 'r--')
 xlabel('DC Bias (V)')
-ylabel('Depletion_width')
-fixfigs(1,3,14,12)
-
+ylabel('Depletion Radius (um)')
+%set(gca,'yscale','log')
+xlim( [min(Vtsv(in_depletion)) max(Vtsv(in_depletion)) ])
+fixfigs(5,3,14,12)
 
 
