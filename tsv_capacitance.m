@@ -3,11 +3,11 @@ clear all
 
 %% Inputs
 
-tsv_diameter = 5e-6; % (m) Diameter of TSV metal core
-l_tsv = 20e-6; % (m) TSV length
+tsv_diameter = 5e-6; %0.680e-6; % (m) Diameter of TSV metal core
+l_tsv = 50e-6; %15e-6; % (m) TSV length
 tox = 120e-9; % (m) Thickness of oxide liner
 
-Na_cm = 2e15; % (cm^-3) Background substrate doping (p-type)
+Na_cm = 1.25e15; % (cm^-3) Background substrate doping (p-type)
 ni_cm = 1e10; % (cm^-3) Intrinsic carrier concentration in substrate (1e10 for Si)
 
 epsr_si = 11.7; % (-) Relative permittivity of silicon
@@ -161,5 +161,18 @@ ylabel('Depletion Radius (um)')
 %set(gca,'yscale','log')
 xlim( [min(Vtsv(in_depletion)) max(Vtsv(in_depletion)) ])
 fixfigs(5,3,14,12)
+
+
+l_tsv_um = l_tsv*1e6;
+figure(6)
+clf
+hold on
+plot(Vtsv, Ctsv/l_tsv_um*1e15)
+plot(Vtsv(vind_dep_start:vind_dep_start+1), [min(Ctsv/l_tsv_um) max(Ctsv/l_tsv_um)]*1e15,'k:')
+plot(Vtsv(vind_dep_stop-1:vind_dep_stop), [min(Ctsv/l_tsv_um) max(Ctsv/l_tsv_um)]*1e15,'k:')
+xlabel('DC Bias (V)')
+ylabel('TSV Capacitance (fF/\mu m)')
+%set(gca,'yscale','log')
+fixfigs(6,3,14,12)
 
 
